@@ -1,0 +1,206 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sanitary Map Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; height: 100vh; display: grid; grid-template-rows: auto 1fr; background: radial-gradient(1200px 800px at 10% 15%, rgba(99,102,241,0.5), transparent 60%), radial-gradient(1200px 800px at 90% 25%, rgba(14,165,233,0.5), transparent 60%), linear-gradient(135deg, #0ea5e9, #7c3aed 60%, #ef4444); background-attachment: fixed; }
+    header { padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.35); display: flex; gap: 12px; align-items: center; background: rgba(255,255,255,0.12); backdrop-filter: blur(10px); color: #f8fafc; }
+    #map { width: 100%; height: 100%; border-top: 1px solid rgba(255,255,255,0.15); }
+    .btn { padding: 8px 12px; background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; border-radius: 8px; text-decoration: none; cursor: pointer; border: none; box-shadow: 0 6px 20px rgba(99,102,241,.35); }
+    .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+    .green { background: #22c55e; color: white; }
+    .yellow { background: #eab308; color: #1f2937; }
+    .red { background: #ef4444; color: white; }
+    /* Insights bar clickable chips */
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .chip { padding: 6px 10px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.28); border-radius: 999px; color: #f8fafc; cursor: pointer; user-select: none; }
+    .chip:hover { background: rgba(255,255,255,0.22); }
+    /* Slide-over list panel */
+    #listPanel { position: fixed; top: 0; right: 0; height: 100%; width: 360px; background: rgba(255,255,255,0.98); box-shadow: -12px 0 30px rgba(0,0,0,.2); transform: translateX(100%); transition: transform .25s ease; display: grid; grid-template-rows: auto 1fr; z-index: 1000; }
+    #listPanel.open { transform: translateX(0); }
+    #listHeader { padding: 12px 16px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; }
+    #listBody { overflow: auto; padding: 8px 12px; }
+    .listItem { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; margin: 8px 0; background: #ffffff; }
+    .listItem h4 { margin: 0 0 6px 0; font-size: 14px; }
+    .muted { color: #475569; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Sanitary Map AI</strong>
+    <span id="insights" class="chips"></span>
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <button class="btn" id="refreshBtn">Refresh</button>
+      <a class="btn" href="index.html">Logout</a>
+    </div>
+  </header>
+  <div id="map"></div>
+  <div id="listPanel">
+    <div id="listHeader">
+      <div id="listTitle">List</div>
+      <button id="closeList" class="btn" style="padding:6px 10px;">Close</button>
+    </div>
+    <div id="listBody"></div>
+  </div>
+  <script>
+    const API_BASE = location.origin.startsWith('file') ? 'http://localhost:4000' : '';
+    const token = localStorage.getItem('token');
+    if (!token) location.href = 'admin.html';
+
+    const map = L.map('map').setView([20.5937, 78.9629], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    function colorForSeverity(sev) {
+      if (sev === 'high') return 'red';
+      if (sev === 'medium') return 'orange';
+      return 'green';
+    }
+
+    let markers = [];
+    let lastReports = [];
+
+    function clearMarkers() {
+      for (const m of markers) map.removeLayer(m);
+      markers = [];
+    }
+
+    function renderInsights(items) {
+      const totals = { low: 0, medium: 0, high: 0 };
+      for (const r of items) totals[r.severity] = (totals[r.severity] || 0) + 1;
+      const total = items.length || 0;
+      const el = document.getElementById('insights');
+      el.innerHTML = '';
+      const make = (label, value, filter) => {
+        const span = document.createElement('span');
+        span.className = 'chip';
+        span.setAttribute('data-filter', filter);
+        span.textContent = `${label}: ${value}`;
+        el.appendChild(span);
+      };
+      make('Total', total, 'all');
+      make('Low', totals.low, 'low');
+      make('Medium', totals.medium, 'medium');
+      make('High', totals.high, 'high');
+    }
+
+    function openList(title, list) {
+      const panel = document.getElementById('listPanel');
+      const titleEl = document.getElementById('listTitle');
+      const body = document.getElementById('listBody');
+      titleEl.textContent = title;
+      body.innerHTML = '';
+      if (!list.length) {
+        body.innerHTML = '<div class="muted">No items found.</div>';
+      } else {
+        list.forEach((r) => {
+          const div = document.createElement('div');
+          div.className = 'listItem';
+          div.innerHTML = `
+            <h4>${(r.username || 'Anonymous').toString().replace(/</g,'&lt;')}</h4>
+            <div class="muted">${new Date(r.created_at).toLocaleString()} • ${r.severity.toUpperCase()} • ${r.status.replace('_',' ')}</div>
+            <div>${(r.description || '').toString().replace(/</g,'&lt;')}</div>
+            <div class="muted">Lat: ${Number(r.latitude).toFixed(5)}, Lng: ${Number(r.longitude).toFixed(5)}</div>
+          `;
+          div.addEventListener('click', () => {
+            panel.classList.remove('open');
+            map.setView([r.latitude, r.longitude], 14);
+          });
+          body.appendChild(div);
+        });
+      }
+      panel.classList.add('open');
+    }
+
+    document.getElementById('closeList').addEventListener('click', () => {
+      document.getElementById('listPanel').classList.remove('open');
+    });
+
+    document.getElementById('insights').addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-filter]');
+      if (!chip) return;
+      const filter = chip.getAttribute('data-filter');
+      let list = lastReports;
+      let title = 'All Reports';
+      if (filter === 'low' || filter === 'medium' || filter === 'high') {
+        list = lastReports.filter(r => r.severity === filter);
+        title = `${filter[0].toUpperCase()}${filter.slice(1)} Reports`;
+      }
+      openList(title, list);
+    });
+
+    async function loadReports() {
+      try {
+        const resp = await fetch(API_BASE + '/api/reports', { headers: { Authorization: 'Bearer ' + token } });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Failed to load');
+        lastReports = Array.isArray(data) ? data : [];
+        renderInsights(lastReports);
+        clearMarkers();
+        lastReports.forEach((r) => {
+          const circle = L.circleMarker([r.latitude, r.longitude], {
+            radius: 8,
+            color: colorForSeverity(r.severity),
+            fillColor: colorForSeverity(r.severity),
+            fillOpacity: 0.8
+          }).addTo(map);
+
+          const imgHtml = r.image_path ? `<div><img src="/${r.image_path}" alt="uploaded" style="max-width:180px;border-radius:8px;border:1px solid #e2e8f0;"/></div>` : '';
+          const popup = `
+            <div style="min-width:220px;">
+              <div><strong>${r.username || 'Anonymous'}</strong></div>
+              <div>${r.description || ''}</div>
+              <div style="margin:6px 0;">
+                <span class="badge ${r.severity === 'high' ? 'red' : r.severity === 'medium' ? 'yellow' : 'green'}">${r.severity.toUpperCase()}</span>
+                <span style="margin-left:6px;">${new Date(r.created_at).toLocaleString()}</span>
+              </div>
+              ${imgHtml}
+              <div style="margin-top:6px; font-size:12px; color:#334155;">Lat: ${Number(r.latitude).toFixed(5)}, Lng: ${Number(r.longitude).toFixed(5)}</div>
+              <div style="margin-top:8px; display:flex; gap:8px;">
+                <button data-id="${r.id}" data-status="in_progress" class="btn">In Progress</button>
+                <button data-id="${r.id}" data-status="resolved" class="btn">Resolved</button>
+              </div>
+            </div>`;
+          circle.bindPopup(popup);
+          circle.on('popupopen', () => {
+            const container = circle.getPopup().getElement();
+            const buttons = container.querySelectorAll('button[data-id]');
+            buttons.forEach((b) => b.addEventListener('click', async (ev) => {
+              const id = ev.currentTarget.getAttribute('data-id');
+              const status = ev.currentTarget.getAttribute('data-status');
+              await updateStatus(id, status);
+              await loadReports();
+            }));
+          });
+
+          markers.push(circle);
+        });
+      } catch (err) {
+        alert('Failed: ' + err.message);
+      }
+    }
+
+    async function updateStatus(id, status) {
+      const resp = await fetch(API_BASE + '/api/reports/' + id + '/status', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ status })
+      });
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json.error || 'Failed');
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      loadReports();
+    });
+
+    loadReports();
+  </script>
+</body>
+</html>
