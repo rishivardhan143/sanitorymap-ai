@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Login - Sanitary Map AI</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 24px; min-height: 100vh; background: radial-gradient(1200px 800px at 15% 15%, rgba(99,102,241,0.55), transparent 60%), radial-gradient(1000px 700px at 85% 25%, rgba(14,165,233,0.55), transparent 60%), linear-gradient(135deg, #0ea5e9, #7c3aed 60%, #ef4444); background-attachment: fixed; }
+    .container { max-width: 420px; margin: 0 auto; background: rgba(255,255,255,0.14); padding: 24px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.28); box-shadow: 0 10px 30px rgba(0,0,0,.15); backdrop-filter: blur(12px); color: #f8fafc; }
+    label { display: block; margin: 12px 0 6px; }
+    input { width: 100%; padding: 10px; border: 1px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.2); color: #f8fafc; border-radius: 10px; }
+    input::placeholder { color: #e2e8f0; }
+    button { margin-top: 16px; padding: 10px 16px; background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; border: none; border-radius: 10px; width: 100%; box-shadow: 0 6px 20px rgba(99,102,241,.35); }
+    .note { color: #e2e8f0; font-size: 14px; }
+    a { color: #e2e8f0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Admin / NGO Login</h1>
+    <p class="note">Default seeded account: admin / admin123</p>
+    <form id="loginForm">
+      <label>Username</label>
+      <input name="username" required />
+      <label>Password</label>
+      <input name="password" type="password" required />
+      <button type="submit">Login</button>
+    </form>
+    <p id="status"></p>
+    <p><a href="index.html">Back</a></p>
+  </div>
+  <script>
+    const API_BASE = location.origin.startsWith('file') ? 'http://localhost:4000' : '';
+    const form = document.getElementById('loginForm');
+    const statusEl = document.getElementById('status');
+
+    async function parseJsonSafe(resp) {
+      const text = await resp.text();
+      try { return JSON.parse(text); } catch { return { _raw: text }; }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      statusEl.textContent = 'Signing in...';
+      const payload = {
+        username: form.elements['username'].value,
+        password: form.elements['password'].value
+      };
+      try {
+        const resp = await fetch(API_BASE + '/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await parseJsonSafe(resp);
+        if (!resp.ok) throw new Error(data.error || data._raw || 'Login failed');
+        if (!data.token) throw new Error('No token from server');
+        localStorage.setItem('token', data.token);
+        location.href = 'dashboard.html';
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>
